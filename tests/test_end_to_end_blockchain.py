@@ -4,10 +4,13 @@ Tests pipeline anchoring, verification, and tamper detection.
 """
 
 import json
+import socket
 import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 
 from app.blockchain.client import BlockchainClient
 from app.evidence.canonicalize import build_evidence, canonical_json_str
@@ -20,12 +23,42 @@ from app.social.validator import SocialValidator
 from app.pipeline import Pipeline
 
 
-def test_blockchain_client_local_anchor_and_verify(tmp_path: Path):
+from web3 import Web3
+
+
+def _is_local_node_running() -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", 8545), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+_NODE_REASON = "Local Hardhat node is not running on port 8545 (start with 'npm run dev')"
+
+
+@pytest.fixture
+def deployed_contract():
+    """Deploy a fresh EvidenceRegistry instance to the local node for the test."""
+    w3 = Web3(Web3.HTTPProvider("http://127.0.0.1:8545"))
+    artifact_path = Path(__file__).parent.parent / "artifacts" / "contracts" / "EvidenceRegistry.sol" / "EvidenceRegistry.json"
+    with open(artifact_path, encoding="utf-8") as f:
+        art = json.load(f)
+
+    factory = w3.eth.contract(abi=art["abi"], bytecode=art["bytecode"])
+    acct = w3.eth.accounts[0]
+    tx_hash = factory.constructor().transact({"from": acct})
+    receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+    return receipt.contractAddress
+
+
+@pytest.mark.skipif(not _is_local_node_running(), reason=_NODE_REASON)
+def test_blockchain_client_local_anchor_and_verify(tmp_path: Path, deployed_contract: str):
     """Test anchoring to local Hardhat node and verifying on-chain."""
     client = BlockchainClient(
         rpc_url="http://127.0.0.1:8545",
         private_key="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-        contract_address="0x5FbDB2315678afecb367f032d93F642f64180aa3",
+        contract_address=deployed_contract,
     )
 
     sample_evidence = build_evidence(
@@ -66,7 +99,8 @@ def test_blockchain_client_local_anchor_and_verify(tmp_path: Path):
     assert record["search_provider"] == "serpapi_google_lens"
 
 
-def test_cli_verify_match_and_mismatch(tmp_path: Path, monkeypatch):
+@pytest.mark.skipif(not _is_local_node_running(), reason=_NODE_REASON)
+def test_cli_verify_match_and_mismatch(tmp_path: Path, monkeypatch, deployed_contract: str):
     """Test CLI verify subcommand with local Hardhat contract: VERIFIED -> MISMATCH -> VERIFIED."""
     # Set environment variables for the CLI to use local Hardhat
     monkeypatch.setenv("SEPOLIA_RPC_URL", "http://127.0.0.1:8545")
@@ -74,12 +108,12 @@ def test_cli_verify_match_and_mismatch(tmp_path: Path, monkeypatch):
         "WALLET_PRIVATE_KEY",
         "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
     )
-    monkeypatch.setenv("CONTRACT_ADDRESS", "0x5FbDB2315678afecb367f032d93F642f64180aa3")
+    monkeypatch.setenv("CONTRACT_ADDRESS", deployed_contract)
 
     client = BlockchainClient(
         rpc_url="http://127.0.0.1:8545",
         private_key="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-        contract_address="0x5FbDB2315678afecb367f032d93F642f64180aa3",
+        contract_address=deployed_contract,
     )
 
     run_dir = tmp_path / "run_demo"
@@ -132,7 +166,8 @@ def test_cli_verify_match_and_mismatch(tmp_path: Path, monkeypatch):
     assert exit_code == 0
 
 
-def test_full_pipeline_run_with_local_chain(tmp_path: Path):
+@pytest.mark.skipif(not _is_local_node_running(), reason=_NODE_REASON)
+def test_full_pipeline_run_with_local_chain(tmp_path: Path, deployed_contract: str):
     """Test full 8-stage pipeline run using real face detection and local Hardhat anchoring."""
     from app.config import Settings
     project_root = Path(__file__).parent.parent
@@ -170,7 +205,7 @@ def test_full_pipeline_run_with_local_chain(tmp_path: Path):
     client = BlockchainClient(
         rpc_url="http://127.0.0.1:8545",
         private_key="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-        contract_address="0x5FbDB2315678afecb367f032d93F642f64180aa3",
+        contract_address=deployed_contract,
     )
 
     pipeline = Pipeline(
