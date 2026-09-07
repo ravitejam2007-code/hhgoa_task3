@@ -15,9 +15,21 @@ import logging
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+import os
 
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    # Graceful fallback to load .env using standard library if python-dotenv is not installed
+    env_file = Path(__file__).resolve().parent.parent / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
 
 # Configure root logger to warning by default so raw logs don't clutter CLI output
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
